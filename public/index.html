@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GitHub 市场扫描</title>
+    <style>
+      body { max-width: 1100px; margin: 40px auto; padding: 0 20px; font: 15px/1.6 system-ui, sans-serif; color: #202124; }
+      form { display: flex; gap: 8px; margin-bottom: 24px; } input, button { font: inherit; padding: 8px 12px; } input { flex: 1; } button { cursor: pointer; }
+      .muted { color: #666; } .error { color: #b00020; } .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin: 12px 0; }
+      table { width: 100%; border-collapse: collapse; } th, td { text-align: left; border-bottom: 1px solid #eee; padding: 8px; vertical-align: top; }
+      .bar { height: 8px; background: #e8eefc; border-radius: 4px; } .bar > span { display: block; height: 100%; background: #3f63d3; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>GitHub 垂直市场扫描</h1>
+    <form id="scan-form"><select id="mode"><option value="keyword">关键词发现</option><option value="natural_language">自然语言研究</option></select><input id="keyword" placeholder="输入关键词，例如 jev" required /><button>开始扫描</button></form>
+    <p id="status" class="muted"></p>
+    <main id="report"></main>
+    <script>
+      const form = document.querySelector('#scan-form');
+      const status = document.querySelector('#status');
+      const report = document.querySelector('#report');
+      let currentScanId = null;
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault(); report.innerHTML = ''; status.textContent = '正在创建扫描任务…';
+        const mode = document.querySelector('#mode').value;
+        const value = document.querySelector('#keyword').value;
+        const response = await fetch('/api/scans', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(mode === 'keyword' ? { mode, keyword: value } : { mode, request: value }) });
+        const task = await response.json(); if (!response.ok) { status.textContent = task.error; return; }
+        currentScanId = task.id;
+        poll(task.id);
+      });
+      document.querySelector('#mode').addEventListener('change', (event) => {
+        document.querySelector('#keyword').placeholder = event.target.value === 'keyword' ? '输入关键词，例如 jev' : '描述你想了解的行业或技术，例如：大家如何用 jev 做项目';
+      });
+      async function poll(id) {
+        const scan = await (await fetch('/api/scans/' + id)).json();
+        status.textContent = '状态：' + scan.status;
+        if (['completed', 'partial', 'failed'].includes(scan.status)) { if (scan.status !== 'failed') render(await (await fetch('/api/scans/' + id + '/report?page=1&pageSize=20')).json()); else status.textContent += '：' + scan.error_message; return; }
+        setTimeout(() => poll(id), 1200);
+      }
+      function render(data) {
+        report.innerHTML = '<div class="card"><strong>主题：</strong>' + escapeHtml(data.keyword) + '<br><strong>模式：</strong>' + escapeHtml(data.inputMode || '') + '<br><strong>有效项目：</strong>' + data.validProjects + ' / ' + data.totalHits + '<br><a href="/api/scans/' + data.scanId + '/report.html">下载 HTML 报告</a></div>';
+        if (data.searchPlan) report.innerHTML += '<div class="card"><h2>搜索计划</h2><p>' + (data.searchPlan.queries || []).map(escapeHtml).join(' · ') + '</p><p class="muted">' + (data.searchPlan.assumptions || []).map(escapeHtml).join('；') + '</p></div>';
+        if (data.marketAnalysis) report.innerHTML += '<div class="card"><h2>核心结论</h2><h3>市场机会</h3><p>' + escapeHtml(data.marketAnalysis.marketOpportunity || '') + '</p><h3>核心痛点</h3><ul>' + (data.marketAnalysis.corePainPoints || []).map(escapeHtml).map(x => '<li>' + x + '</li>').join('') + '</ul><h3>最大风险</h3><ul>' + (data.marketAnalysis.biggestRisks || []).map(escapeHtml).map(x => '<li>' + x + '</li>').join('') + '</ul><h3>MVP 建议</h3><ul>' + (data.marketAnalysis.mvp || []).map(escapeHtml).map(x => '<li>' + x + '</li>').join('') + '</ul><h3>优先客户</h3><ul>' + (data.marketAnalysis.priorityCustomers || []).map(escapeHtml).map(x => '<li>' + x + '</li>').join('') + '</ul><h3>竞品分析</h3><p>' + escapeHtml(data.marketAnalysis.competitorAnalysis || '') + '</p></div>';
+        report.innerHTML += '<div class="card"><h2>方向分布</h2>' + data.categories.map(c => '<p><strong>' + escapeHtml(c.category) + '</strong> ' + c.count + ' (' + c.percentage + '%)<div class="bar"><span style="width:' + c.percentage + '%"></span></div></p>').join('') + '</div>';
+        report.innerHTML += '<div class="card"><h2>项目（第 ' + data.page + ' / ' + data.totalPages + ' 页）</h2><table><tr><th>项目</th><th>分类</th><th>Stars</th><th>活跃度</th></tr>' + data.repositories.map(r => '<tr><td><a href="' + r.html_url + '" target="_blank" rel="noreferrer">' + escapeHtml(r.full_name) + '</a><br><span class="muted">' + escapeHtml(r.projectAnalysis?.summary || r.description || '') + '</span></td><td>' + escapeHtml(r.classification.mainCategory) + '</td><td>' + r.stargazers_count + '</td><td>' + escapeHtml(r.classification.activityLevel) + '</td></tr>').join('') + '</table><button id="prev" ' + (data.page <= 1 ? 'disabled' : '') + '>上一页</button> <button id="next" ' + (data.page >= data.totalPages ? 'disabled' : '') + '>下一页</button></div>';
+        document.querySelector('#prev').onclick = () => loadPage(data.page - 1);
+        document.querySelector('#next').onclick = () => loadPage(data.page + 1);
+      }
+      async function loadPage(page) { render(await (await fetch('/api/scans/' + currentScanId + '/report?page=' + page + '&pageSize=20')).json()); }
+      function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c])); }
+    </script>
+  </body>
+</html>
