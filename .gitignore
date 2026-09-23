@@ -4,3 +4,8 @@
 node_modules/
 dist/
 .DS_Store
+
+# Local planning and agent files; intentionally excluded from the public repository.
+.agents/
+docs/
+openspec/
